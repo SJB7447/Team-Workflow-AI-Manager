@@ -91,13 +91,13 @@ export default function App() {
 
   const mapReqFromDB = (r: any): Requirement => ({
     id: r.id, title: r.title, category: (r.category as any) || 'requirement', content: r.content || '', link: r.link || '',
-    attachmentName: r.attachment_name, attachmentType: r.attachment_type,
+    attachmentName: r.attachment_name, attachment_type: r.attachment_type,
     attachmentData: r.attachment_data, createdAt: Number(r.created_at)
   });
 
   const mapMeetingFromDB = (m: any): MeetingLog => ({
     id: m.id, title: m.title, date: m.date || '', attendees: m.attendees || '', content: m.content || '',
-    attachmentName: m.attachment_name, attachmentType: m.attachment_type,
+    attachmentName: m.attachment_name, attachment_type: m.attachment_type,
     attachmentData: m.attachment_data, createdAt: Number(m.created_at)
   });
 
@@ -138,7 +138,8 @@ export default function App() {
   }, [fetchData]);
 
   // --- Save Logic ---
-  const handleAutoSave = async (op: () => Promise<any>, successCallback?: () => void) => {
+  // Fix: Modified op type from Promise<any> to any to accommodate Supabase query builders which are Thenable but don't implement full Promise interface
+  const handleAutoSave = async (op: () => any, successCallback?: () => void) => {
     setSaveStatus('saving');
     try {
       const { error } = await op();
@@ -166,8 +167,9 @@ export default function App() {
       email: newMember.email.trim() || null,
       phone: newMember.phone.trim() || null
     };
+    // Fix: Wrapped Supabase call in async lambda to ensure Promise compliance for handleAutoSave
     await handleAutoSave(
-      () => supabase.from('team_members').insert([nm]),
+      async () => await supabase.from('team_members').insert([nm]),
       () => {
         setNewMember({ name: '', role: '', email: '', phone: '' });
       }
@@ -277,8 +279,9 @@ export default function App() {
                     onAIAnalyze={() => setAiProgressModal({isOpen:true, taskId:t.id, taskTitle:t.title, deadline:t.deadline, description:t.description, result:null, loading:false})}
                     onUpdateField={async (f,v) => {
                       const updatedValue = { [f]: v };
+                      // Fix: Wrapped Supabase call in async lambda for handleAutoSave type compatibility
                       await handleAutoSave(
-                        () => supabase.from('tasks').update(updatedValue).eq('id', t.id),
+                        async () => await supabase.from('tasks').update(updatedValue).eq('id', t.id),
                         () => setTasks(prev => prev.map(task => task.id === t.id ? { ...task, ...updatedValue } : task))
                       );
                     }}
@@ -410,8 +413,9 @@ export default function App() {
               issue: data.issue || editingTask?.issue || '', 
               created_at: editingTask?.createdAt || Date.now() 
             };
+            // Fix: Wrapped Supabase call in async lambda for handleAutoSave compliance
             await handleAutoSave(
-              () => supabase.from('tasks').upsert([payload]), 
+              async () => await supabase.from('tasks').upsert([payload]), 
               () => setIsTaskFormOpen(false)
             );
           }} 
@@ -430,7 +434,8 @@ export default function App() {
               attachment_name: data.attachmentName, attachment_type: data.attachmentType, attachment_data: data.attachmentData,
               created_at: editingReq?.createdAt || Date.now() 
             };
-            await handleAutoSave(() => supabase.from('requirements').upsert([payload]), () => setIsReqFormOpen(false));
+            // Fix: Wrapped Supabase upsert in async lambda to ensure standard Promise return
+            await handleAutoSave(async () => await supabase.from('requirements').upsert([payload]), () => setIsReqFormOpen(false));
           }}
           initialData={editingReq}
           fields={[
@@ -452,10 +457,11 @@ export default function App() {
             const id = editingMeeting?.id || crypto.randomUUID();
             const payload = { 
               id, title: data.title, date: data.date, attendees: data.attendees, content: data.content,
-              attachment_name: data.attachmentName, attachment_type: data.attachmentType, attachment_data: data.attachmentData,
+              attachment_name: data.attachment_name, attachment_type: data.attachment_type, attachment_data: data.attachment_data,
               created_at: editingMeeting?.createdAt || Date.now() 
             };
-            await handleAutoSave(() => supabase.from('meetings').upsert([payload]), () => setIsMeetingFormOpen(false));
+            // Fix: Wrapped Supabase upsert in async lambda to resolve Promise type mismatch
+            await handleAutoSave(async () => await supabase.from('meetings').upsert([payload]), () => setIsMeetingFormOpen(false));
           }}
           initialData={editingMeeting}
           fields={[
@@ -534,6 +540,44 @@ export default function App() {
         </div>
       )}
 
+      {/* AI Summary Modal */}
+      {aiSummaryModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-2xl h-[85vh] flex flex-col overflow-hidden border dark:border-slate-800">
+            <div className="p-6 border-b dark:border-slate-800 flex justify-between items-center bg-indigo-600 text-white">
+              <h3 className="font-bold flex items-center gap-3 text-lg"><Sparkles className="w-6 h-6 animate-pulse"/> AI 리포트 생성기</h3>
+              <button onClick={() => setAiSummaryModal({...aiSummaryModal, isOpen:false})}><X className="w-6 h-6" /></button>
+            </div>
+            <div className="flex-1 p-8 overflow-y-auto bg-slate-50 dark:bg-slate-950 custom-scrollbar transition-colors">
+              {aiSummaryModal.loading ? (
+                <div className="flex flex-col items-center justify-center h-full text-indigo-600">
+                  <RefreshCw className="w-12 h-12 animate-spin mb-4" />
+                  <p className="font-bold">Gemini AI 분석 중...</p>
+                </div>
+              ) : !aiSummaryModal.content ? (
+                <div className="text-center py-24 transition-colors">
+                  <p className="text-slate-500 dark:text-slate-400 mb-8 font-bold">현재 탭의 데이터를 종합하여 전략적 보고서를 생성합니다.</p>
+                  <button onClick={async () => {
+                    setAiSummaryModal(v => ({...v, loading:true}));
+                    const data = currentTab === 'workflow' ? tasks : currentTab === 'requirements' ? requirements : meetings;
+                    const res = await geminiService.generateAISummary(currentTab as any, data);
+                    setAiSummaryModal({isOpen:true, loading:false, content:res});
+                  }} className="px-12 py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-xl hover:bg-indigo-700 transition-all active:scale-95">리포트 생성 시작</button>
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap font-sans text-slate-700 dark:text-slate-300 leading-relaxed text-sm bg-white dark:bg-slate-900 p-8 rounded-3xl border dark:border-slate-800 shadow-inner transition-colors">{aiSummaryModal.content}</pre>
+              )}
+            </div>
+            {aiSummaryModal.content && (
+              <div className="p-6 bg-white dark:bg-slate-900 border-t dark:border-slate-800 flex flex-wrap gap-3 justify-center transition-colors">
+                <button onClick={() => alert('클립보드에 복사되었습니다.')} className="flex-1 py-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400 rounded-2xl font-bold">복사하기</button>
+                <button onClick={() => setAiSummaryModal({...aiSummaryModal, isOpen:false})} className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold transition-colors">닫기</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Floating Status Bar */}
       <div className={`fixed bottom-6 left-6 right-6 sm:left-auto flex items-center gap-3 px-6 py-3.5 rounded-full shadow-2xl border transition-all duration-700 z-50 backdrop-blur-2xl ${saveStatus==='saved'?'bg-white/90 dark:bg-slate-900/90 border-green-100 dark:border-green-900/30 text-green-600 dark:text-green-400':'bg-indigo-50/90 dark:bg-indigo-900/40 border-indigo-100 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400'}`}>
         {saveStatus==='saving' ? <RefreshCw className="w-4 h-4 animate-spin"/> : <ShieldCheck className="w-4 h-4"/>}
@@ -551,9 +595,58 @@ export default function App() {
               <button onClick={() => setDeleteTarget(null)} className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold transition-colors">취소</button>
               <button onClick={async () => {
                 const table = deleteTarget.type === 'task' ? 'tasks' : deleteTarget.type === 'req' ? 'requirements' : deleteTarget.type === 'meeting' ? 'meetings' : 'team_members';
-                await handleAutoSave(() => supabase.from(table).delete().eq('id', deleteTarget.id));
+                // Fix: Wrapped Supabase delete call in async lambda for handleAutoSave type compatibility
+                await handleAutoSave(async () => await supabase.from(table).delete().eq('id', deleteTarget.id));
                 setDeleteTarget(null);
               }} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg">삭제 확정</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Analysis Overlay */}
+      {aiProgressModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border dark:border-slate-800 animate-in zoom-in duration-300 transition-colors">
+            <div className="p-6 border-b dark:border-slate-800 flex justify-between items-center bg-indigo-50 dark:bg-indigo-900/20 transition-colors">
+              <h3 className="font-bold text-indigo-900 dark:text-indigo-100 flex items-center gap-2"><Calculator className="w-5 h-5"/> Gemini AI 정밀 진단</h3>
+              <button onClick={() => setAiProgressModal(prev => ({ ...prev, isOpen: false }))}><X className="w-5 h-5 text-indigo-400"/></button>
+            </div>
+            <div className="p-8 space-y-6">
+              <div className="bg-slate-50 dark:bg-slate-950 p-5 rounded-2xl text-sm border dark:border-slate-800 transition-colors">
+                <p className="font-bold text-slate-700 dark:text-slate-200 transition-colors">{aiProgressModal.taskTitle}</p>
+                <p className="text-slate-400 flex items-center gap-1 mt-1 text-[11px] transition-colors"><Calendar className="w-3 h-3"/> 마감: {aiProgressModal.deadline}</p>
+              </div>
+              <textarea className="w-full border dark:border-slate-800 bg-transparent dark:text-white p-5 rounded-2xl h-36 text-sm outline-none focus:ring-2 focus:ring-indigo-100 dark:focus:ring-indigo-900/30 transition-all" placeholder="진척 상황을 입력해 주세요..." value={aiProgressModal.description} onChange={e => setAiProgressModal(prev => ({ ...prev, description: e.target.value }))} />
+              {aiProgressModal.loading ? (
+                <div className="flex flex-col items-center py-6 text-indigo-600 dark:text-indigo-400 animate-in fade-in transition-colors"><RefreshCw className="w-8 h-8 animate-spin mb-3"/><span className="text-sm font-bold">AI 분석 중...</span></div>
+              ) : aiProgressModal.result ? (
+                <div className="bg-indigo-50/50 dark:bg-indigo-900/20 p-6 rounded-2xl border dark:border-indigo-900/50 animate-in fade-in zoom-in duration-300 transition-colors">
+                  <div className="flex justify-between items-end mb-2">
+                    <span className="text-xs font-black text-indigo-700 dark:text-indigo-300 uppercase tracking-widest transition-colors">AI 진단 결과</span>
+                    <span className="text-3xl font-black text-indigo-600 dark:text-indigo-400 transition-colors">{aiProgressModal.result.percentage}%</span>
+                  </div>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 italic leading-relaxed pl-4 border-l-2 border-indigo-300 transition-colors">"{aiProgressModal.result.reasoning}"</p>
+                </div>
+              ) : null}
+              <div className="flex gap-4 transition-colors">
+                <button onClick={async () => {
+                   setAiProgressModal(v => ({...v, loading:true}));
+                   const res = await geminiService.calculateTaskProgress({title:aiProgressModal.taskTitle, description:aiProgressModal.description, deadline:aiProgressModal.deadline}, requirements, meetings);
+                   setAiProgressModal(v => ({...v, result:res, loading:false}));
+                }} className="flex-1 py-4 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-400 rounded-2xl font-black transition-all shadow-md">진단 개시</button>
+                {aiProgressModal.result && (
+                  <button onClick={async () => {
+                    const p = aiProgressModal.result!.percentage;
+                    const status: TaskStatus = p === 100 ? 'done' : 'in-progress';
+                    // Fix: Wrapped Supabase update call in async lambda for handleAutoSave to resolve Promise type mismatch
+                    await handleAutoSave(
+                      async () => await supabase.from('tasks').update({progress: p, status, description: aiProgressModal.description}).eq('id', aiProgressModal.taskId!),
+                      () => setAiProgressModal(v => ({...v, isOpen:false}))
+                    );
+                  }} className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black transition-all shadow-xl">분석값 적용</button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -587,7 +680,7 @@ function TaskItem({ task, onEdit, onDelete, onAIAnalyze, onUpdateField }: any) {
   const statusColors: any = { 
     todo: 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700', 
     'in-progress': 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 border-blue-100 dark:border-blue-900/50', 
-    review: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 border-purple-100 dark:border-purple-900/50', 
+    review: 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-400 border-purple-100 dark:border-blue-900/50', 
     done: 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 border-green-100 dark:border-green-900/50' 
   };
   
@@ -725,7 +818,7 @@ function GenericForm({ title, onClose, onSave, fields, initialData }: any) {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 5 * 1024 * 1024) { alert("최대 5MB 파일만 가능합니다."); return; }
+      if (file.size > 500 * 1024 * 1024) { alert("최대 500MB 파일까지 업로드 가능합니다."); return; }
       const reader = new FileReader();
       reader.onloadend = () => {
         setFormData({ ...formData, attachmentName: file.name, attachmentType: file.type.startsWith('image/') ? 'image' : 'file', attachmentData: reader.result as string });
@@ -755,7 +848,7 @@ function GenericForm({ title, onClose, onSave, fields, initialData }: any) {
                 <div className="space-y-3 transition-colors">
                    <div onClick={() => fileInputRef.current?.click()} className="w-full h-28 bg-slate-50 dark:bg-slate-800 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-750 transition-colors group">
                     <FileUp className="w-8 h-8 text-slate-300 dark:text-slate-600 mb-2 group-hover:scale-110 transition-transform transition-colors" />
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest transition-colors">파일 선택</span>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest transition-colors">파일 선택 (최대 500MB)</span>
                     <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
                   </div>
                   {formData.attachmentName && (
@@ -840,4 +933,3 @@ function TaskForm({ task, members, onClose, onSave }: any) {
     </div>
   );
 }
-

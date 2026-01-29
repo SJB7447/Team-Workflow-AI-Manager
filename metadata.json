@@ -1,0 +1,7 @@
+{
+  "name": "Secure Team Workflow & AI Manager",
+  "description": "A high-security, AI-enhanced project management tool for tracking tasks, requirements, and meeting logs with integrated Gemini reasoning.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
